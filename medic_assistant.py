@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
-from openai import OpenAI
+import openai
 from langdetect import detect
 
 # 🔐 Pakrauna API raktus iš .env failo
@@ -10,8 +10,8 @@ load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# 🔑 Sukuriamas OpenAI klientas
-client = OpenAI(api_key=OPENAI_API_KEY)
+# 🔑 Nustato OpenAI API raktą
+openai.api_key = OPENAI_API_KEY
 
 # 🧠 Sistema prompt – boto vaidmuo
 SYSTEM_PROMPT = """
@@ -69,7 +69,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }.get(lang, "Atsakyk lietuviškai.")
 
     try:
-        response = client.chat.completions.create(
+        response = openai.ChatCompletion.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": f"{lang_prompt} {SYSTEM_PROMPT}"},
@@ -78,7 +78,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             temperature=0.5,
             max_tokens=1500
         )
-        reply_text = response.choices[0].message.content
+        reply_text = response.choices[0].message["content"]
         await update.message.reply_text(reply_text)
     except Exception as e:
         await update.message.reply_text(f"⚠️ Klaida: {str(e)}")
@@ -94,5 +94,6 @@ if __name__ == "__main__":
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     print("🤖 Medic Assistant veikia. Eik į Telegram ir pradėk pokalbį.")
     app.run_polling()
+
 
     
