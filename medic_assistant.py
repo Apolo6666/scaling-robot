@@ -90,11 +90,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"⚠️ Klaida: {e}")
 
 # ── Paleidimas ────────────────────────────────────────────────────────
-async def main():
+if __name__ == "__main__":
     app = (
         ApplicationBuilder()
         .token(TELEGRAM_TOKEN)
-        .concurrent_updates(True)  # PTB 22.x rekomenduojama
+        .concurrent_updates(True)
         .build()
     )
 
@@ -106,12 +106,8 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logging.info("🤖 Medic Assistant veikia – rašyk /start Telegram’e.")
-    await app.run_polling(drop_pending_updates=True)
-
-if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
-
+    # NEbereikia asyncio.run – tiesiog:
+    app.run_polling(drop_pending_updates=True)
 
 
 
