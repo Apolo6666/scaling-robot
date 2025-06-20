@@ -1,7 +1,5 @@
-# requirements.txt – šiuolaikinis variantas
 openai>=1.0.0
-python-telegram-bot==22.1 
+python-telegram-bot==22.1
 python-dotenv==1.0.1
 langdetect==1.0.9
 urllib3>=1.26.0
-six>=1.17.0
