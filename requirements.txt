@@ -1,5 +1,9 @@
-openai>=1.0.0
+# ─────────── pagrindinės bibliotekos ───────────
+openai>=1.88.0,<2.0
 python-telegram-bot==22.1
 python-dotenv==1.0.1
 langdetect==1.0.9
-urllib3>=1.26.0
+
+# ─────────── pagalbai fiksuojamos ───────────
+urllib3>=1.26.0,<3.0
+six>=1.17.0,<2.0
