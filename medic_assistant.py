@@ -1,8 +1,8 @@
 """
 Telegram bot: Medic Assistant
-Adds subscription tiers and daily usage limits.
-Features gated by subscription level.
-Author: Generated with ChatGPT o3, 2025-06-20
+– Prenumeratos planai, dienos limitai ir funkcijų apribojimai
+– Administratoriai (ADMIN_IDS) nepatenka į limitus
+Autorė: Generated with ChatGPT o3, 2025-06-20 (merged version)
 """
 
 import os
@@ -33,7 +33,10 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# ───────────────────────────── Constants ────────────────────────────
+# ───────────────────────────── Admins ──────────────────────────────
+ADMIN_IDS: list[int] = [712878075]  # ← įrašykite kitus administratorių ID, jei reikia
+
+# ───────────────────────────── Constants ───────────────────────────
 SYSTEM_PROMPT = (
     "\n⚠️ Šis DI skirtas tik mokymuisi. "
     "Tu esi ‘Medic Assistant’ – aiškini laboratorinius tyrimus, simptomus, diagnostikos algoritmus; "
@@ -57,17 +60,15 @@ FEATURE_MIN_TIER = {
     "rooms": 3,
 }
 
-# ───────────────────────────── Globals ──────────────────────────────
+# ───────────────────────────── Globals ─────────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-user_progress: dict[int, int] = {}  # total queries lifetime
-user_daily_usage: dict[int, dict[str, int]] = {}  # {'date': 'YYYY-MM-DD', 'count': n}
+user_progress: dict[int, int] = {}            # viso užklausų
+user_daily_usage: dict[int, dict[str, int]] = {}  # {'date': YYYY-MM-DD, 'count': n}
 rooms: dict[str, list[int]] = {}
-user_tiers: dict[int, int] = {}  # default empty => Free
+user_tiers: dict[int, int] = {}               # default → Free
 
-# ──────────────────────── Helper functions ──────────────────────────
-
+# ──────────────────────── Helper functions ─────────────────────────
 def detect_language(text: str) -> str:
-    """Detect language using langdetect; default to Lithuanian."""
     try:
         from langdetect import detect
         return detect(text)
@@ -89,11 +90,13 @@ def today_str() -> str:
 
 
 def increment_usage(user_id: int) -> bool:
-    """Increment daily usage counter. Returns True if within quota, False otherwise."""
+    """Padidina dienos skaitiklį. Grąžina True, jei dar nepasiektas limitas / admin / neribota."""
+    if user_id in ADMIN_IDS:
+        return True
     tier = user_tiers.get(user_id, 0)
     quota = TIER_DAILY_QUOTA[tier]
     if quota is None:
-        return True  # unlimited
+        return True
     record = user_daily_usage.setdefault(user_id, {"date": today_str(), "count": 0})
     if record["date"] != today_str():
         record["date"] = today_str()
@@ -105,6 +108,8 @@ def increment_usage(user_id: int) -> bool:
 
 
 def has_feature(user_id: int, feature: str) -> bool:
+    if user_id in ADMIN_IDS:
+        return True
     return user_tiers.get(user_id, 0) >= FEATURE_MIN_TIER.get(feature, 0)
 
 
@@ -132,17 +137,17 @@ async def ask_openai(user_msg: str, lang_code: str) -> str:
     )
     return resp.choices[0].message.content
 
-
-# ──────────────────────────── Commands ──────────────────────────────
-# Start / Help
+# ──────────────────────────── Commands ─────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 Sveikas! Aš – *Medic Assistant*.", parse_mode="Markdown")
+    await update.message.reply_text("👋 Sveikas! Aš – *Medic Assistant*.", parse_mode="Markdown")
     await update.message.reply_text(
         "Komandos:\n"
-        "/start, /profile, /quiz, /answer, /review, /export_pdf, /export_test, /flashcards, /method, /guideline, /simpatient, /progress, /progress_pdf, /subscription_status, /upgrade, /create_room, /join_room, /list_rooms, /resetcontext")
+        "/start, /profile, /quiz, /answer, /review, /export_pdf, /export_test, "
+        "/flashcards, /method, /guideline, /simpatient, /progress, /progress_pdf, "
+        "/subscription_status, /upgrade, /create_room, /join_room, /list_rooms, /resetcontext"
+    )
 
-# ── Prenumerata ──
+# Prenumerata
 async def subscription_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tier = user_tiers.get(update.effective_user.id, 0)
     await update.message.reply_text(f"🔐 Tavo planas: {TIER_NAMES[tier]}")
@@ -156,14 +161,11 @@ async def upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
         disable_web_page_preview=True,
     )
 
-# ── Profilis ──
+# Profilis
 async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Pasirink kalbą:",
-        reply_markup=ReplyKeyboardMarkup([
-            ["lt", "en"],
-            ["ru", "pl"],
-        ], one_time_keyboard=True),
+        reply_markup=ReplyKeyboardMarkup([["lt", "en"], ["ru", "pl"]], one_time_keyboard=True),
     )
     return PROFILE_LANGUAGE
 
@@ -172,10 +174,7 @@ async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.setdefault("profile", {})["language"] = update.message.text.lower()
     await update.message.reply_text(
         "Pasirink šalį:",
-        reply_markup=ReplyKeyboardMarkup([
-            ["lt", "uk"],
-            ["us", "de"],
-        ], one_time_keyboard=True),
+        reply_markup=ReplyKeyboardMarkup([["lt", "uk"], ["us", "de"]], one_time_keyboard=True),
     )
     return PROFILE_COUNTRY
 
@@ -184,19 +183,15 @@ async def set_country(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["profile"]["country"] = update.message.text.lower()
     await update.message.reply_text(
         "Pasirink lygį:",
-        reply_markup=ReplyKeyboardMarkup([
-            ["studentas", "gydytojas", "mokslininkas"],
-        ], one_time_keyboard=True),
+        reply_markup=ReplyKeyboardMarkup([["studentas", "gydytojas", "mokslininkas"]], one_time_keyboard=True),
     )
     return PROFILE_LEVEL
 
 
 async def set_level(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["profile"]["level"] = update.message.text.lower()
-    await update.message.reply_text(
-        f"✅ Profilis nustatytas: {context.user_data['profile']}",
-        reply_markup=ReplyKeyboardRemove(),
-    )
+    await update.message.reply_text(f"✅ Profilis nustatytas: {context.user_data['profile']}",
+                                    reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
 
@@ -209,11 +204,11 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Nutraukta.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
-# ── Method info ──
+# Method info
 async def method(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📖 Įrašyk medicininį metodą, kurį nori suprasti.")
 
-# ── Quiz flow ──
+# Quiz
 async def quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🧪 Įrašyk testavimo temą:")
     return QUIZ_TOPIC
@@ -249,10 +244,7 @@ async def receive_answers(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await quota_exceeded(update, context)
     ans = update.message.text.strip()
     quiz = context.user_data["last_quiz"]["content"]
-    prompt = (
-        f"Tekstas su ✅ teisingais atsakymais: {quiz} "
-        f"Vartotojo atsakymai: {ans}. Įvertink ir paaiškink."
-    )
+    prompt = f"Tekstas su ✅ teisingais atsakymais: {quiz} Vartotojo atsakymai: {ans}. Įvertink ir paaiškink."
     lang = context.user_data.get("profile", {}).get("language", detect_language(ans))
     result = await ask_openai(prompt, lang)
     await update.message.reply_text(f"📝 Vertinimas:\n{result}")
@@ -266,7 +258,7 @@ async def review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❗ Nėra testo.")
 
-# ── Export PDF (tier ≥2) ──
+# Export PDF (tier ≥2)
 async def export_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not has_feature(update.effective_user.id, "pdf"):
         return await restricted_feature(update, context, "pdf")
@@ -288,8 +280,7 @@ async def export_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❗ Nėra testo.")
 
-
-# ── Flashcards (tier ≥2) ──
+# Flashcards (tier ≥2)
 async def flashcards(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not has_feature(update.effective_user.id, "flashcards"):
         return await restricted_feature(update, context, "flashcards")
@@ -307,7 +298,7 @@ async def receive_flash_topic(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text(f"🧠 Flashcards:\n\n{rc}")
     return ConversationHandler.END
 
-# ── Simulated patient ──
+# Simulated patient
 async def simpatient(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🤖 Įrašyk simptomus:")
     return SIM_SYMPTOMS
@@ -318,21 +309,19 @@ async def receive_symptoms(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await quota_exceeded(update, context)
     sym = update.message.text.strip()
     lang = context.user_data.get("profile", {}).get("language", detect_language(sym))
-    prompt = (
-        f"Remdamasis simptomais: {sym}, sukurk klinikinį atvejį su anamneze, tyrimais, diagnozę."
-    )
+    prompt = f"Remdamasis simptomais: {sym}, sukurk klinikinį atvejį su anamneze, tyrimais, diagnozę."
     case = await ask_openai(prompt, lang)
     await update.message.reply_text(f"📋 Atvejis:\n\n{case}")
     return ConversationHandler.END
 
-# ── Guidelines feed ──
+# Guidelines feed
 async def guideline(update: Update, context: ContextTypes.DEFAULT_TYPE):
     feed = feedparser.parse("https://www.ecdc.europa.eu/en/latest-news/rss")
     items = feed["entries"][:3]
     msg = "📑 Naujausios ECDC gairės:\n" + "\n".join(f"- {i.title}: {i.link}" for i in items)
     await update.message.reply_text(msg)
 
-# ── Progress info ──
+# Progress
 async def progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     cnt = user_progress.get(uid, 0)
@@ -348,7 +337,7 @@ async def progress_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     path = save_as_pdf(txt, "progress.pdf")
     await update.message.reply_document(InputFile(path))
 
-# ── Rooms (tier ≥3) ──
+# Rooms (tier ≥3)
 async def create_room(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not has_feature(update.effective_user.id, "rooms"):
         return await restricted_feature(update, context, "rooms")
@@ -378,7 +367,7 @@ async def list_rooms(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❗ Nėra kambarių")
 
-# ── Image analysis (tier ≥3) ──
+# Image analysis (tier ≥3)
 async def image_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not has_feature(update.effective_user.id, "image_analysis"):
         return await restricted_feature(update, context, "image_analysis")
@@ -396,7 +385,7 @@ async def image_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(analysis.choices[0].message.content)
 
-# ── Generic message handler ──
+# Generic message
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not increment_usage(update.effective_user.id):
         return await quota_exceeded(update, context)
@@ -407,12 +396,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["last_reply"] = reply
     await update.message.reply_text(reply)
 
-# ──────────────────────────── Helpers ───────────────────────────────
+# ──────────────────────────── Helpers ──────────────────────────────
 async def quota_exceeded(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tier = user_tiers.get(update.effective_user.id, 0)
     quota = TIER_DAILY_QUOTA[tier]
     await update.message.reply_text(
-        f"🚦 Viršyta dienos riba ({quota} užklausa). Atnaujink planą komanda /upgrade arba bandyk rytoj."
+        f"🚦 Viršyta dienos riba ({quota} užklausa). Atnaujink planą su /upgrade arba bandyk rytoj."
     )
 
 
@@ -422,11 +411,11 @@ async def restricted_feature(update: Update, context: ContextTypes.DEFAULT_TYPE,
         f"🔒 Ši funkcija prieinama nuo {TIER_NAMES[min_tier]}. Naudok /upgrade."
     )
 
-# ─────────────────────────── Main entry ────────────────────────────
+# ─────────────────────────── Main entry ───────────────────────────
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).concurrent_updates(True).build()
 
-    # ── Conversation handlers ──
+    # Conversation handlers
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("profile", profile)],
         states={
@@ -461,7 +450,7 @@ if __name__ == "__main__":
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
 
-    # ── Simple command handlers ──
+    # Simple command handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("review", review))
     app.add_handler(CommandHandler("export_pdf", export_pdf))
@@ -477,12 +466,13 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("list_rooms", list_rooms))
     app.add_handler(CommandHandler("resetcontext", resetcontext))
 
-    # ── Message/photo handlers ──
+    # Message / photo handlers
     app.add_handler(MessageHandler(filters.PHOTO, image_analysis))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logging.info("🤖 Medic Assistant veikia su prenumeratomis.")
+    logging.info("🤖 Medic Assistant veikia su prenumeratomis + admin išimtimis.")
     app.run_polling(drop_pending_updates=True)
+
 
 
 
