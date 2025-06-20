@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder, CommandHandler,
-    MessageHandler, ContextTypes, filters
+    MessageHandler, ContextTypes, filters,
 )
 import openai
 from langdetect import detect
@@ -15,8 +15,9 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 openai.api_key = OPENAI_API_KEY
 
 SYSTEM_PROMPT = """
-⚠️ SVARBU: Šis DI skirtas tik mokymuisi. Nediagnozuoja ir neskiria gydymo.
-Tu esi „Medic Assistant“ – aiškini laboratorinius tyrimus bei diagnostiką, remiesi PubMed/UpToDate/Cochrane.
+⚠️ Šis DI skirtas tik mokymuisi. Nediagnozuoja ir neskiria gydymo.
+Tu esi „Medic Assistant“ – aiškini laboratorinius tyrimus, simptomus, diagnostikos algoritmus;
+remiesi PubMed, UpToDate, Cochrane, SAM.lt; jokios klinikinės rekomendacijos.
 """
 
 def detect_language(text: str) -> str:
@@ -25,10 +26,10 @@ def detect_language(text: str) -> str:
     except Exception:
         return "lt"
 
-# ── Komandos ───────────────────────────────────────────────────────────────────
+# ── Komandos ────────────────────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Sveikas! Aš esu *Medic Assistant* – tavo mokymosi pagalbininkas.\n\n"
+        "👋 Sveikas! Aš – *Medic Assistant*.\n\n"
         "/case – klinikinis atvejis\n"
         "/studyplan – mokymosi planas\n"
         "/explain – paaiškinti metodą\n"
@@ -37,7 +38,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def case(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🩺 Įrašyk norimą atvejo tipą (pvz. hepatitas)")
+    await update.message.reply_text("🩺 Įrašyk atvejo tipą (pvz. hepatitas)")
 
 async def studyplan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📚 Įrašyk temą – sudarysiu planą")
@@ -48,7 +49,7 @@ async def explain(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def resetcontext(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("♻️ Kontekstas išvalytas!")
 
-# ── Žinutės ────────────────────────────────────────────────────────────────────
+# ── Žinučių apdorojimas ─────────────────────────────────────────────────────
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_msg = update.message.text
     lang = detect_language(user_msg)
@@ -64,7 +65,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             model="gpt-4",
             messages=[
                 {"role": "system", "content": f"{lang_prompt} {SYSTEM_PROMPT}"},
-                {"role": "user", "content": user_msg}
+                {"role": "user",   "content": user_msg}
             ],
             temperature=0.5,
             max_tokens=1500,
@@ -73,7 +74,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"⚠️ Klaida: {e}")
 
-# ── Paleidimas ────────────────────────────────────────────────────────────────
+# ── Paleidimas ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
@@ -84,8 +85,9 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("resetcontext", resetcontext))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("🤖 Medic Assistant veikia – gali rašyti /start Telegram’e.")
+    print("🤖 Medic Assistant veikia – rašyk /start Telegram’e.")
     app.run_polling()
+
 
 
 
