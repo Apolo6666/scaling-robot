@@ -8,7 +8,7 @@ from telegram.ext import (
 import openai
 from langdetect import detect
 
-# 🔐 Aplinkos kintamieji
+# ── Aplinkos kintamieji ──────────────────────────────────────────────────────
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -86,7 +86,9 @@ if __name__ == "__main__":
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     print("🤖 Medic Assistant veikia – rašyk /start Telegram’e.")
-    app.run_polling()
+    # drop_pending_updates=True → pašalina webhook’ą ir senus update’us, kad nebūtų Conflict
+    app.run_polling(drop_pending_updates=True)
+
 
 
 
