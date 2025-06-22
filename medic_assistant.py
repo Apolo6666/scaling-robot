@@ -9,6 +9,7 @@ import os
 import logging
 import datetime as dt
 import feedparser
+import json
 import base64
 import re
 from dotenv import load_dotenv
@@ -70,6 +71,8 @@ user_daily_usage: dict[int, dict[str, int]] = {}  # {'date': YYYY-MM-DD, 'count'
 rooms: dict[str, list[int]] = {}
 user_tiers: dict[int, int] = {}               # default → Free
 BOT_USERNAME: str | None = None
+user_history: dict[int, list[dict[str, str]]] = {}
+analytics_log: list[dict[str, str]] = []
 
 # ──────────────────────── Helper functions ─────────────────────────
 def detect_language(text: str) -> str:
@@ -127,6 +130,19 @@ def save_as_pdf(text: str, filename: str = "document.pdf") -> str:
     path = f"/tmp/{filename}"
     pdf.output(path)
     return path
+
+
+def log_interaction(user_id: int, question: str, answer: str, feature: str = ""):
+    """Store Q/A pairs for history and analytics."""
+    history = user_history.setdefault(user_id, [])
+    history.append({"q": question, "a": answer})
+    analytics_log.append(
+        {
+            "user": str(user_id),
+            "feature": feature or "message",
+            "time": dt.datetime.now().isoformat(),
+        }
+    )
 
 
 async def ask_openai(user_msg: str, lang_code: str) -> str:
@@ -190,7 +206,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Komandos:\n"
         "/start, /profile, /quiz, /answer, /review, /export_pdf, /export_test, "
-        "/flashcards, /method, /guideline, /simpatient, /progress, /progress_pdf, "
+        "/export_history, /flashcards, /method, /guideline, /simpatient, /progress, /progress_pdf, "
         "/subscription_status, /upgrade, /create_room, /join_room, /list_rooms, /resetcontext"
     )
 
@@ -276,6 +292,7 @@ async def receive_quiz_topic(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data["last_reply"] = questions
     user_progress[update.effective_user.id] = user_progress.get(update.effective_user.id, 0) + 1
     await update.message.reply_text(f"🧠 Klausimai apie '{topic}':\n\n{questions}")
+    log_interaction(update.effective_user.id, topic, questions, "quiz")
     return ConversationHandler.END
 
 
@@ -297,6 +314,7 @@ async def receive_answers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result = await ask_openai(prompt, lang)
     context.user_data["last_reply"] = result
     await update.message.reply_text(f"📝 Vertinimas:\n{result}")
+    log_interaction(update.effective_user.id, ans, result, "answer")
     return ConversationHandler.END
 
 
@@ -329,6 +347,26 @@ async def export_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❗ Nėra testo.")
 
+async def export_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    hist = user_history.get(update.effective_user.id)
+    if not hist:
+        return await update.message.reply_text("❗ Nėra istorijos.")
+    fmt = context.args[0].lower() if context.args else "pdf"
+    if fmt == "json":
+        data = json.dumps(hist, ensure_ascii=False, indent=2)
+        path = "/tmp/history.json"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(data)
+    elif fmt == "txt":
+        text = "\n\n".join(f"Q: {h['q']}\nA: {h['a']}" for h in hist)
+        path = "/tmp/history.txt"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+    else:
+        text = "\n\n".join(f"Q: {h['q']}\nA: {h['a']}" for h in hist)
+        path = save_as_pdf(text, "history.pdf")
+    await update.message.reply_document(InputFile(path))
+
 # Flashcards (tier ≥2)
 async def flashcards(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not has_feature(update.effective_user.id, "flashcards"):
@@ -346,6 +384,7 @@ async def receive_flash_topic(update: Update, context: ContextTypes.DEFAULT_TYPE
     rc = await ask_openai(prompt, lang)
     context.user_data["last_reply"] = rc
     await update.message.reply_text(f"🧠 Flashcards:\n\n{rc}")
+    log_interaction(update.effective_user.id, top, rc, "flashcards")
     return ConversationHandler.END
 
 # Simulated patient
@@ -363,6 +402,7 @@ async def receive_symptoms(update: Update, context: ContextTypes.DEFAULT_TYPE):
     case = await ask_openai(prompt, lang)
     context.user_data["last_reply"] = case
     await update.message.reply_text(f"📋 Atvejis:\n\n{case}")
+    log_interaction(update.effective_user.id, sym, case, "simpatient")
     return ConversationHandler.END
 
 # Guidelines feed
@@ -387,6 +427,15 @@ async def progress_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt = f"Naudotojo ID: {uid}\nUžklausos (viso): {cnt}"
     path = save_as_pdf(txt, "progress.pdf")
     await update.message.reply_document(InputFile(path))
+
+async def usage_log_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    counts: dict[str, int] = {}
+    for rec in analytics_log:
+        counts[rec["user"]] = counts.get(rec["user"], 0) + 1
+    msg = "\n".join(f"{uid}: {cnt}" for uid, cnt in counts.items()) or "No usage"
+    await update.message.reply_text(msg)
 
 # Rooms (tier ≥3)
 async def create_room(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -454,12 +503,17 @@ async def image_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result = analysis.choices[0].message.content
     context.user_data["last_reply"] = result
     await update.message.reply_text(result)
+    log_interaction(update.effective_user.id, path, result, "image")
 
 # Generic message
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not increment_usage(update.effective_user.id):
         return await quota_exceeded(update, context)
     user_msg = update.message.text
+
+    if "profile" not in context.user_data and not context.user_data.get("profile_prompted"):
+        await update.message.reply_text("🔧 Susikurk profilį su /profile, kad galėtum gauti personalizuotus atsakymus.")
+        context.user_data["profile_prompted"] = True
 
     # In group chats, respond only when mentioned or replied to
     if update.message.chat.type != "private":
@@ -488,6 +542,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["last_reply"] = reply
 
     await update.message.reply_text(reply)
+    log_interaction(update.effective_user.id, user_msg, reply)
 
 # ──────────────────────────── Helpers ──────────────────────────────
 async def quota_exceeded(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -549,10 +604,12 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("review", review))
     app.add_handler(CommandHandler("export_pdf", export_pdf))
     app.add_handler(CommandHandler("export_test", export_test))
+    app.add_handler(CommandHandler("export_history", export_history))
     app.add_handler(CommandHandler("method", method))
     app.add_handler(CommandHandler("guideline", guideline))
     app.add_handler(CommandHandler("progress", progress))
     app.add_handler(CommandHandler("progress_pdf", progress_pdf))
+    app.add_handler(CommandHandler("usage_log", usage_log_cmd))
     app.add_handler(CommandHandler("subscription_status", subscription_status))
     app.add_handler(CommandHandler("upgrade", upgrade))
     app.add_handler(CommandHandler("create_room", create_room))
