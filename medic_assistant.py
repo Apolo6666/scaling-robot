@@ -9,6 +9,8 @@ import os
 import logging
 import datetime as dt
 import feedparser
+import base64
+import re
 from dotenv import load_dotenv
 from telegram import (
     Update,
@@ -24,14 +26,14 @@ from telegram.ext import (
     filters,
     ConversationHandler,
 )
-from openai import OpenAI
+from openai import AsyncOpenAI
 from fpdf import FPDF
 
 # ─────────────────────────── Environment ───────────────────────────
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=OPENAI_API_KEY)
+client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 # ───────────────────────────── Admins ──────────────────────────────
 ADMIN_IDS: list[int] = [712878075]  # ← įrašykite kitus administratorių ID, jei reikia
@@ -40,7 +42,8 @@ ADMIN_IDS: list[int] = [712878075]  # ← įrašykite kitus administratorių ID,
 SYSTEM_PROMPT = (
     "\n⚠️ Šis DI skirtas tik mokymuisi. "
     "Tu esi ‘Medic Assistant’ – aiškini laboratorinius tyrimus, simptomus, diagnostikos algoritmus; "
-    "remiesi PubMed, UpToDate, Cochrane, SAM.lt; jokios klinikinės rekomendacijos."
+    "visi atsakymai turi būti pagrįsti tik recenzuotais medicinos šaltiniais: "
+    "PubMed, UpToDate, Cochrane, ECDC gairėmis ir SAM.lt rekomendacijomis."
 )
 
 PROFILE_LANGUAGE, PROFILE_COUNTRY, PROFILE_LEVEL, QUIZ_TOPIC, SIM_SYMPTOMS, FLASH_TOPIC, ANSWER_STATE = range(7)
@@ -66,6 +69,7 @@ user_progress: dict[int, int] = {}            # viso užklausų
 user_daily_usage: dict[int, dict[str, int]] = {}  # {'date': YYYY-MM-DD, 'count': n}
 rooms: dict[str, list[int]] = {}
 user_tiers: dict[int, int] = {}               # default → Free
+BOT_USERNAME: str | None = None
 
 # ──────────────────────── Helper functions ─────────────────────────
 def detect_language(text: str) -> str:
@@ -126,7 +130,7 @@ def save_as_pdf(text: str, filename: str = "document.pdf") -> str:
 
 
 async def ask_openai(user_msg: str, lang_code: str) -> str:
-    resp = client.chat.completions.create(
+    resp = await client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": f"{lang_prompt(lang_code)} {SYSTEM_PROMPT}"},
@@ -136,6 +140,49 @@ async def ask_openai(user_msg: str, lang_code: str) -> str:
         max_tokens=1500,
     )
     return resp.choices[0].message.content
+
+
+async def generate_quiz(topic: str, context: ContextTypes.DEFAULT_TYPE) -> str:
+    level = context.user_data.get("profile", {}).get("level", "studentas")
+    lang = context.user_data.get("profile", {}).get("language", detect_language(topic))
+    prompt = (
+        f"Sukurk 3 pasirenkamo atsakymo klausimus ({level} lygiui) apie: {topic}. "
+        "Formatuok su pažymėtais atsakymais A), B), C). Prie teisingo atsakymo pridėk ✅."
+    )
+    questions = await ask_openai(prompt, lang)
+    context.user_data["last_quiz"] = {"topic": topic, "content": questions}
+    context.user_data["last_reply"] = questions
+    return questions
+
+
+async def generate_flashcards(topic: str, context: ContextTypes.DEFAULT_TYPE) -> str:
+    lang = context.user_data.get("profile", {}).get("language", detect_language(topic))
+    prompt = f"Sukurk 5 flashcards tema: {topic}, klausimas ir trumpas atsakymas."
+    cards = await ask_openai(prompt, lang)
+    context.user_data["last_reply"] = cards
+    return cards
+
+
+async def generate_notes(topic: str, context: ContextTypes.DEFAULT_TYPE) -> str:
+    lang = context.user_data.get("profile", {}).get("language", detect_language(topic))
+    prompt = (
+        f"Sukurk glaustą, aiškų medicininį konspektą studentui apie {topic}, "
+        "naudodamasis PubMed, Cochrane ir UpToDate duomenimis. Struktūruok punktuose."
+    )
+    notes = await ask_openai(prompt, lang)
+    context.user_data["last_reply"] = notes
+    return notes
+
+
+async def analyze_literature(reference: str, context: ContextTypes.DEFAULT_TYPE) -> str:
+    lang = context.user_data.get("profile", {}).get("language", detect_language(reference))
+    prompt = (
+        f"Remiantis straipsniu (DOI arba pavadinimu: {reference}), "
+        "pateik mokslinę santrauką, klinikinę reikšmę ir kontekstą. Naudok tik recenzuotus šaltinius."
+    )
+    summary = await ask_openai(prompt, lang)
+    context.user_data["last_reply"] = summary
+    return summary
 
 # ──────────────────────────── Commands ─────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -226,6 +273,7 @@ async def receive_quiz_topic(update: Update, context: ContextTypes.DEFAULT_TYPE)
     lang = context.user_data.get("profile", {}).get("language", detect_language(topic))
     questions = await ask_openai(prompt, lang)
     context.user_data["last_quiz"] = {"topic": topic, "content": questions}
+    context.user_data["last_reply"] = questions
     user_progress[update.effective_user.id] = user_progress.get(update.effective_user.id, 0) + 1
     await update.message.reply_text(f"🧠 Klausimai apie '{topic}':\n\n{questions}")
     return ConversationHandler.END
@@ -247,6 +295,7 @@ async def receive_answers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = f"Tekstas su ✅ teisingais atsakymais: {quiz} Vartotojo atsakymai: {ans}. Įvertink ir paaiškink."
     lang = context.user_data.get("profile", {}).get("language", detect_language(ans))
     result = await ask_openai(prompt, lang)
+    context.user_data["last_reply"] = result
     await update.message.reply_text(f"📝 Vertinimas:\n{result}")
     return ConversationHandler.END
 
@@ -295,6 +344,7 @@ async def receive_flash_topic(update: Update, context: ContextTypes.DEFAULT_TYPE
     lang = context.user_data.get("profile", {}).get("language", detect_language(top))
     prompt = f"Sukurk 5 flashcards tema: {top}, klausimas ir trumpas atsakymas."
     rc = await ask_openai(prompt, lang)
+    context.user_data["last_reply"] = rc
     await update.message.reply_text(f"🧠 Flashcards:\n\n{rc}")
     return ConversationHandler.END
 
@@ -311,6 +361,7 @@ async def receive_symptoms(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = context.user_data.get("profile", {}).get("language", detect_language(sym))
     prompt = f"Remdamasis simptomais: {sym}, sukurk klinikinį atvejį su anamneze, tyrimais, diagnozę."
     case = await ask_openai(prompt, lang)
+    context.user_data["last_reply"] = case
     await update.message.reply_text(f"📋 Atvejis:\n\n{case}")
     return ConversationHandler.END
 
@@ -376,24 +427,66 @@ async def image_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file = await update.message.photo[-1].get_file()
     path = f"/tmp/{file.file_id}.jpg"
     await file.download_to_drive(path)
+
+    # OpenAI API can't access local file paths. Send the image as a Base64 data
+    # URL instead.
+    with open(path, "rb") as img:
+        encoded = base64.b64encode(img.read()).decode()
+
     analysis = await client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": "Analizuok medicininę nuotrauką."},
-            {"role": "user", "content": f"Atvaizdas: {path}"},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Prašau išanalizuoti nuotrauką."},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{encoded}"
+                        },
+                    },
+                ],
+            },
         ],
     )
-    await update.message.reply_text(analysis.choices[0].message.content)
+    result = analysis.choices[0].message.content
+    context.user_data["last_reply"] = result
+    await update.message.reply_text(result)
 
 # Generic message
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not increment_usage(update.effective_user.id):
         return await quota_exceeded(update, context)
     user_msg = update.message.text
+
+    # In group chats, respond only when mentioned or replied to
+    if update.message.chat.type != "private":
+        mention = f"@{BOT_USERNAME}" if BOT_USERNAME else ""
+        if not (mention.lower() in user_msg.lower() or update.message.reply_to_message):
+            return
+        if mention:
+            user_msg = user_msg.replace(mention, "", 1).strip()
+
+    low = user_msg.lower()
     lang_code = context.user_data.get("profile", {}).get("language", detect_language(user_msg))
     user_progress[update.effective_user.id] = user_progress.get(update.effective_user.id, 0) + 1
-    reply = await ask_openai(user_msg, lang_code)
-    context.user_data["last_reply"] = reply
+
+    if any(k in low for k in ["testas", "užduotys", "pasitikrink"]):
+        reply = await generate_quiz(user_msg, context)
+    elif any(k in low for k in ["flashcards", "kortelės", "atmintinė"]):
+        if not has_feature(update.effective_user.id, "flashcards"):
+            return await restricted_feature(update, context, "flashcards")
+        reply = await generate_flashcards(user_msg, context)
+    elif any(k in low for k in ["konspektas", "santrauka", "paaiškink"]):
+        reply = await generate_notes(user_msg, context)
+    elif re.match(r"^10.\d{4,9}/[-._;()/:A-Z0-9]+$", user_msg, re.I):
+        reply = await analyze_literature(user_msg, context)
+    else:
+        reply = await ask_openai(user_msg, lang_code)
+        context.user_data["last_reply"] = reply
+
     await update.message.reply_text(reply)
 
 # ──────────────────────────── Helpers ──────────────────────────────
@@ -414,6 +507,7 @@ async def restricted_feature(update: Update, context: ContextTypes.DEFAULT_TYPE,
 # ─────────────────────────── Main entry ───────────────────────────
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).concurrent_updates(True).build()
+    BOT_USERNAME = app.bot.username.lower()
 
     # Conversation handlers
     app.add_handler(ConversationHandler(
