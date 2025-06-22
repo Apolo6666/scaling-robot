@@ -103,7 +103,7 @@ def detect_language(text: str) -> str:
         from langdetect import detect
         return detect(text)
     except Exception:
-        return "lt"
+        return "en"
 
 
 def lang_prompt(code: str) -> str:
@@ -112,7 +112,7 @@ def lang_prompt(code: str) -> str:
         "en": "Respond in English.",
         "ru": "Ответь по-русски.",
         "pl": "Odpowiedz po polsku.",
-    }.get(code, "Atsakyk lietuviškai.")
+    }.get(code, "Respond in English.")
 
 
 def today_str() -> str:
@@ -151,7 +151,11 @@ def save_as_pdf(text: str, filename: str = "document.pdf") -> str:
     for line in text.split("\n"):
         pdf.multi_cell(0, 10, line)
     path = f"/tmp/{filename}"
-    pdf.output(path)
+    try:
+        pdf.output(path)
+    except Exception as e:
+        logging.error("PDF creation failed: %s", e)
+        return ""
     return path
 
 
@@ -174,8 +178,8 @@ def parse_metrics(text: str) -> dict[str, float | str]:
     pattern = r"(svoris|kmi|kraujosp\u016bdis|gliukoz\u0117|pulsas|cholesterolis)[:=]?\s*([0-9]+(?:[\.,][0-9]+)?(?:/[0-9]+)?)"
     for key, value in re.findall(pattern, text, re.I):
         key = key.lower()
-        value = value.replace(",", ".")
-        if "/" in value:
+        value = value.replace(',', '.')
+        if '/' in value:
             metrics[key] = value
         else:
             try:
@@ -193,16 +197,20 @@ def strip_keywords(text: str, keywords: list[str]) -> str:
 
 
 async def ask_openai(user_msg: str, lang_code: str) -> str:
-    resp = await client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": f"{lang_prompt(lang_code)} {SYSTEM_PROMPT}"},
-            {"role": "user", "content": user_msg},
-        ],
-        temperature=0.5,
-        max_tokens=1500,
-    )
-    return resp.choices[0].message.content
+    try:
+        resp = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": f"{lang_prompt(lang_code)} {SYSTEM_PROMPT}"},
+                {"role": "user", "content": user_msg},
+            ],
+            temperature=0.5,
+            max_tokens=1500,
+        )
+        return resp.choices[0].message.content
+    except Exception as e:
+        logging.error("OpenAI request failed: %s", e)
+        return "⚠️ Nepavyko gauti atsakymo iš modelio."
 
 
 async def generate_quiz(topic: str, context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -246,7 +254,6 @@ async def analyze_literature(reference: str, context: ContextTypes.DEFAULT_TYPE)
     summary = await ask_openai(prompt, lang)
     context.user_data["last_reply"] = summary
     return summary
-
 
 # ──────────────────── PsycheCare functions ─────────────────────
 async def mood(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -489,22 +496,21 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["profile"] = {"language": update.message.text}
-    await update.message.reply_text("Šalis?")
+    context.user_data.setdefault("profile", {})["language"] = update.message.text.lower()
+    await update.message.reply_text("Šalis?", reply_markup=ReplyKeyboardRemove())
     return PROFILE_COUNTRY
 
 
 async def set_country(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["profile"]["country"] = update.message.text
-    await update.message.reply_text("Lygis (studentas, rezidentas, specialistas)?")
+    context.user_data.setdefault("profile", {})["country"] = update.message.text.lower()
+    await update.message.reply_text("Lygis? (studentas/gydytojas)")
     return PROFILE_LEVEL
 
 
 async def set_level(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["profile"]["level"] = update.message.text.lower()
-    await update.message.reply_text(
-        f"✅ Profilis nustatytas: {context.user_data['profile']}", reply_markup=ReplyKeyboardRemove()
-    )
+    await update.message.reply_text(f"✅ Profilis nustatytas: {context.user_data['profile']}",
+                                    reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
 
@@ -581,7 +587,10 @@ async def export_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await restricted_feature(update, context, "pdf")
     if "last_reply" in context.user_data:
         path = save_as_pdf(context.user_data["last_reply"], "reply.pdf")
-        await update.message.reply_document(InputFile(path))
+        if path:
+            await update.message.reply_document(InputFile(path))
+        else:
+            await update.message.reply_text("❗ Nepavyko sukurti PDF.")
     else:
         await update.message.reply_text("❗ Nėra atsakymo.")
 
@@ -593,7 +602,10 @@ async def export_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
         q = context.user_data["last_quiz"]
         text = f"Tema: {q['topic']}\n\n{q['content']}"
         path = save_as_pdf(text, "testas.pdf")
-        await update.message.reply_document(InputFile(path))
+        if path:
+            await update.message.reply_document(InputFile(path))
+        else:
+            await update.message.reply_text("❗ Nepavyko sukurti PDF.")
     else:
         await update.message.reply_text("❗ Nėra testo.")
 
@@ -615,7 +627,10 @@ async def export_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         text = "\n\n".join(f"Q: {h['q']}\nA: {h['a']}" for h in hist)
         path = save_as_pdf(text, "history.pdf")
-    await update.message.reply_document(InputFile(path))
+    if path:
+        await update.message.reply_document(InputFile(path))
+    else:
+        await update.message.reply_text("❗ Nepavyko sukurti PDF.")
 
 # Flashcards (tier ≥2)
 async def flashcards(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -676,7 +691,10 @@ async def progress_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cnt = user_progress.get(uid, 0)
     txt = f"Naudotojo ID: {uid}\nUžklausos (viso): {cnt}"
     path = save_as_pdf(txt, "progress.pdf")
-    await update.message.reply_document(InputFile(path))
+    if path:
+        await update.message.reply_document(InputFile(path))
+    else:
+        await update.message.reply_text("❗ Nepavyko sukurti PDF.")
 
 async def usage_log_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
@@ -790,7 +808,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif any(k in low for k in ["konspektas", "santrauka", "paaiškink"]):
         topic = strip_keywords(user_msg, ["konspektas", "santrauka", "paaiškink"])
         reply = await generate_notes(topic or user_msg, context)
-    elif re.match(r"^10.\d{4,9}/[-._;()/:A-Z0-9]+$", user_msg, re.I):
+    elif re.match(r"^10.\\d{4,9}/[-._;()/:A-Z0-9]+$", user_msg, re.I):
         reply = await analyze_literature(user_msg, context)
     else:
         reply = await ask_openai(user_msg, lang_code)
@@ -928,6 +946,7 @@ if __name__ == "__main__":
 
     logging.info("🤖 Medic Assistant veikia su prenumeratomis + admin išimtimis.")
     app.run_polling(drop_pending_updates=True)
+
 
  
  
