@@ -1,4 +1,3 @@
-@@ -1,89 +1,89 @@
 """
 Telegram bot: Medic Assistant
 – Prenumeratos planai, dienos limitai ir funkcijų apribojimai
@@ -76,9 +75,7 @@ FEATURE_MIN_TIER = {
     "image_analysis": 3,
     "rooms": 3,
 }
-
 # ───────────────────────────── Globals ─────────────────────────────
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(message)s")
 user_progress: dict[int, int] = {}            # viso užklausų
 user_daily_usage: dict[int, dict[str, int]] = {}  # {'date': YYYY-MM-DD, 'count': n}
@@ -98,7 +95,6 @@ def detect_language(text: str) -> str:
         from langdetect import detect
         return detect(text)
     except Exception:
-        return "lt"
         return "en"
 
 
@@ -108,8 +104,18 @@ def lang_prompt(code: str) -> str:
         "en": "Respond in English.",
         "ru": "Ответь по-русски.",
         "pl": "Odpowiedz po polsku.",
-    }.get(code, "Atsakyk lietuviškai.")
     }.get(code, "Respond in English.")
+LANG_PROMPTS = {
+    "lt": "Atsakyk lietuviškai.",
+    "en": "Respond in English.",
+    "ru": "Ответь по-русски.",
+    "pl": "Odpowiedz po polsku.",
+}
+
+
+def lang_prompt(code: str) -> str:
+    """Return a short prompt for the requested language code."""
+    return LANG_PROMPTS.get(code, LANG_PROMPTS["en"])
 
 
 def today_str() -> str:
@@ -142,15 +148,12 @@ def save_as_pdf(text: str, filename: str = "document.pdf") -> str:
     for line in text.split("\n"):
         pdf.multi_cell(0, 10, line)
     path = f"/tmp/{filename}"
-    pdf.output(path)
     try:
         pdf.output(path)
     except Exception as e:
         logging.error("PDF creation failed: %s", e)
         return ""
     return path
-
-
 def log_interaction(user_id: int, question: str, answer: str, feature: str = ""):
     """Store Q/A pairs for history and analytics."""
     history = user_history.setdefault(user_id, [])
@@ -177,26 +180,12 @@ def parse_metrics(text: str) -> dict[str, float | str]:
             except ValueError:
                 continue
     return metrics
-
-
 def strip_keywords(text: str, keywords: list[str]) -> str:
     """Remove trigger keywords from a message and return the remainder."""
     pattern = "|".join(re.escape(k) for k in keywords)
     cleaned = re.sub(pattern, "", text, flags=re.I)
     return cleaned.strip(" ,.-:")
-
-
 async def ask_openai(user_msg: str, lang_code: str) -> str:
-    resp = await client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": f"{lang_prompt(lang_code)} {SYSTEM_PROMPT}"},
-            {"role": "user", "content": user_msg},
-        ],
-        temperature=0.5,
-        max_tokens=1500,
-    )
-    return resp.choices[0].message.content
     try:
         resp = await client.chat.completions.create(
             model="gpt-4o-mini",
@@ -211,8 +200,6 @@ async def ask_openai(user_msg: str, lang_code: str) -> str:
     except Exception as e:
         logging.error("OpenAI request failed: %s", e)
         return "⚠️ Nepavyko gauti atsakymo iš modelio."
-
-
 async def generate_quiz(topic: str, context: ContextTypes.DEFAULT_TYPE) -> str:
     level = context.user_data.get("profile", {}).get("level", "studentas")
     lang = context.user_data.get("profile", {}).get("language", detect_language(topic))
@@ -522,16 +509,12 @@ async def export_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await restricted_feature(update, context, "pdf")
     if "last_reply" in context.user_data:
         path = save_as_pdf(context.user_data["last_reply"], "reply.pdf")
-        await update.message.reply_document(InputFile(path))
-    if "last_reply" in context.user_data:
-        path = save_as_pdf(context.user_data["last_reply"], "reply.pdf")
         if path:
             await update.message.reply_document(InputFile(path))
         else:
             await update.message.reply_text("❗ Nepavyko sukurti PDF.")
     else:
         await update.message.reply_text("❗ Nėra atsakymo.")
-
 async def export_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not has_feature(update.effective_user.id, "pdf"):
         return await restricted_feature(update, context, "pdf")
@@ -539,15 +522,12 @@ async def export_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
         q = context.user_data["last_quiz"]
         text = f"Tema: {q['topic']}\n\n{q['content']}"
         path = save_as_pdf(text, "testas.pdf")
-        await update.message.reply_document(InputFile(path))
-        path = save_as_pdf(text, "testas.pdf")
         if path:
             await update.message.reply_document(InputFile(path))
         else:
             await update.message.reply_text("❗ Nepavyko sukurti PDF.")
     else:
         await update.message.reply_text("❗ Nėra testo.")
-
 async def export_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     hist = user_history.get(update.effective_user.id)
     if not hist:
@@ -566,12 +546,10 @@ async def export_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         text = "\n\n".join(f"Q: {h['q']}\nA: {h['a']}" for h in hist)
         path = save_as_pdf(text, "history.pdf")
-    await update.message.reply_document(InputFile(path))
     if path:
         await update.message.reply_document(InputFile(path))
     else:
         await update.message.reply_text("❗ Nepavyko sukurti PDF.")
-
 # Flashcards (tier ≥2)
 async def flashcards(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not has_feature(update.effective_user.id, "flashcards"):
@@ -622,12 +600,10 @@ async def progress_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cnt = user_progress.get(uid, 0)
     txt = f"Naudotojo ID: {uid}\nUžklausos (viso): {cnt}"
     path = save_as_pdf(txt, "progress.pdf")
-    await update.message.reply_document(InputFile(path))
     if path:
         await update.message.reply_document(InputFile(path))
     else:
         await update.message.reply_text("❗ Nepavyko sukurti PDF.")
-
 async def usage_log_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return
@@ -696,7 +672,6 @@ async def image_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["last_reply"] = result
     await update.message.reply_text(result)
     log_interaction(update.effective_user.id, path, result, "image")
-
 # Generic message
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logging.debug("Message from %s in %s: %s", update.effective_user.id, update.message.chat.type, update.message.text)
@@ -717,23 +692,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logging.debug("Message in group without mention, ignoring")
             return
         user_msg = user_msg.replace(mention, "", 1).strip()
-
     low = user_msg.lower()
     lang_code = context.user_data.get("profile", {}).get("language", detect_language(user_msg))
     user_progress[update.effective_user.id] = user_progress.get(update.effective_user.id, 0) + 1
-
     if any(k in low for k in ["testas", "užduotys", "pasitikrink"]):
-        reply = await generate_quiz(user_msg, context)
         topic = strip_keywords(user_msg, ["testas", "užduotys", "pasitikrink"])
         reply = await generate_quiz(topic or user_msg, context)
     elif any(k in low for k in ["flashcards", "kortelės", "atmintinė"]):
         if not has_feature(update.effective_user.id, "flashcards"):
             return await restricted_feature(update, context, "flashcards")
-        reply = await generate_flashcards(user_msg, context)
         topic = strip_keywords(user_msg, ["flashcards", "kortelės", "atmintinė"])
         reply = await generate_flashcards(topic or user_msg, context)
     elif any(k in low for k in ["konspektas", "santrauka", "paaiškink"]):
-        reply = await generate_notes(user_msg, context)
         topic = strip_keywords(user_msg, ["konspektas", "santrauka", "paaiškink"])
         reply = await generate_notes(topic or user_msg, context)
     elif re.match(r"^10.\d{4,9}/[-._;()/:A-Z0-9]+$", user_msg, re.I):
@@ -741,11 +711,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         reply = await ask_openai(user_msg, lang_code)
         context.user_data["last_reply"] = reply
-
     await update.message.reply_text(reply)
     log_interaction(update.effective_user.id, user_msg, reply)
     logging.debug("Replied to %s", update.effective_user.id)
-
 # ──────────────────────────── Helpers ──────────────────────────────
 async def quota_exceeded(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tier = user_tiers.get(update.effective_user.id, 0)
@@ -764,7 +732,6 @@ async def post_init(app: Application) -> None:
     me = await app.bot.get_me()
     BOT_USERNAME = me.username.lower()
     logging.debug("Initialized bot username: %s", BOT_USERNAME)
-
 # ─────────────────────────── Main entry ───────────────────────────
 if __name__ == "__main__":
     app = (
@@ -855,18 +822,13 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("join_room", join_room))
     app.add_handler(CommandHandler("list_rooms", list_rooms))
     app.add_handler(CommandHandler("resetcontext", resetcontext))
-
     # Message / photo handlers
-    app.add_handler(MessageHandler(filters.PHOTO, image_analysis))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, image_analysis))
     text_filter = filters.TEXT & ~filters.COMMAND
     app.add_handler(MessageHandler(filters.ChatType.GROUPS & text_filter, handle_message))
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & text_filter, handle_message))
-
     logging.info("🤖 Medic Assistant veikia su prenumeratomis + admin išimtimis.")
     app.run_polling(drop_pending_updates=True)
-    
 
  
  
