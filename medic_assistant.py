@@ -49,7 +49,23 @@ SYSTEM_PROMPT = (
     "PubMed, UpToDate, Cochrane, ECDC gairėmis ir SAM.lt rekomendacijomis."
 )
 
-PROFILE_LANGUAGE, PROFILE_COUNTRY, PROFILE_LEVEL, QUIZ_TOPIC, SIM_SYMPTOMS, FLASH_TOPIC, ANSWER_STATE = range(7)
+(
+    PROFILE_LANGUAGE,
+    PROFILE_COUNTRY,
+    PROFILE_LEVEL,
+    QUIZ_TOPIC,
+    SIM_SYMPTOMS,
+    FLASH_TOPIC,
+    ANSWER_STATE,
+    MOOD_RATING,
+    MOOD_STRESS,
+    MOOD_WORRY,
+    REFLECT_Q1,
+    REFLECT_Q2,
+    REFLECT_Q3,
+    DAILY_GOALS,
+    CALM_CHOICE,
+) = range(15)
 
 # Subscription tiers: 0=Free,1=Basic,2=Pro Student,3=Premium MedTech
 TIER_NAMES: list[str] = [
@@ -77,6 +93,9 @@ user_history: dict[int, list[dict[str, str]]] = {}
 analytics_log: list[dict[str, str]] = []
 health_metrics: dict[int, list[dict[str, float | str]]] = {}
 reminder_tasks: dict[int, list[asyncio.Task]] = {}
+mood_logs: dict[int, list[dict[str, str]]] = {}
+reflect_logs: dict[int, list[dict[str, str]]] = {}
+daily_plans: dict[int, list[dict[str, list[str]]]] = {}
 
 # ──────────────────────── Helper functions ─────────────────────────
 def detect_language(text: str) -> str:
@@ -222,6 +241,140 @@ async def analyze_literature(reference: str, context: ContextTypes.DEFAULT_TYPE)
     return summary
 
 
+# ──────────────────── PsycheCare functions ─────────────────────
+async def mood(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Kaip įvertintum nuotaiką 1–10?")
+    return MOOD_RATING
+
+
+async def mood_rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["mood_entry"] = {"date": today_str(), "rating": update.message.text.strip()}
+    await update.message.reply_text("Ar jauti stresą ar nerimą?")
+    return MOOD_STRESS
+
+
+async def mood_stress(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["mood_entry"]["stress"] = update.message.text.strip()
+    await update.message.reply_text("Kas labiausiai neramina?")
+    return MOOD_WORRY
+
+
+async def mood_worry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    entry = context.user_data.pop("mood_entry", {})
+    entry["worry"] = update.message.text.strip()
+    mood_logs.setdefault(update.effective_user.id, []).append(entry)
+    prompt = (
+        f"Vartotojo nuotaika {entry.get('rating')}, stresas {entry.get('stress')}, neramina: {entry.get('worry')}. "
+        "Pasiūlyk trumpą palaikymą ir kvėpavimo pratimą."
+    )
+    lang = context.user_data.get("profile", {}).get("language", detect_language(entry.get("worry", "")))
+    support = await ask_openai(prompt, lang)
+    context.user_data["last_reply"] = support
+    await update.message.reply_text(support)
+    log_interaction(update.effective_user.id, json.dumps(entry, ensure_ascii=False), support, "mood")
+    return ConversationHandler.END
+
+
+async def reflect(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Kas šiandien pavyko?")
+    return REFLECT_Q1
+
+
+async def reflect_q1(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["reflect"] = {"date": today_str(), "success": update.message.text.strip()}
+    await update.message.reply_text("Kas sukėlė nerimą?")
+    return REFLECT_Q2
+
+
+async def reflect_q2(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["reflect"]["anxiety"] = update.message.text.strip()
+    await update.message.reply_text("Kokios mintys buvo įkyrios?")
+    return REFLECT_Q3
+
+
+async def reflect_q3(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    entry = context.user_data.pop("reflect", {})
+    entry["thoughts"] = update.message.text.strip()
+    reflect_logs.setdefault(update.effective_user.id, []).append(entry)
+    context.user_data["last_reply"] = "Užrašyta."
+    await update.message.reply_text("Užrašyta.")
+    log_interaction(update.effective_user.id, json.dumps(entry, ensure_ascii=False), "saved", "reflect")
+    return ConversationHandler.END
+
+
+async def calm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [["Kvėpavimas"], ["Meditacija"], ["Vizualizacija"], ["Afirmacijos"]]
+    await update.message.reply_text(
+        "Pasirink pratimą:", reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
+    )
+    return CALM_CHOICE
+
+
+async def calm_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    choice = update.message.text.lower()
+    if "kv" in choice:
+        msg = "🧘 Kvėpuok 4 sekundes, sulaikyk 7, iškvėpk 8."
+    elif "medit" in choice:
+        msg = "🧘‍♂️ 3 minučių meditacija: stebėk kvėpavimą."
+    elif "viz" in choice:
+        msg = "🏞️ Įsivaizduok ramią vietą, pajausk kvapus ir garsus."
+    else:
+        msg = "😊 Kartok teiginius: 'Aš susitvarkysiu, aš stiprus'."
+    await update.message.reply_text(msg, reply_markup=ReplyKeyboardRemove())
+    context.user_data["last_reply"] = msg
+    log_interaction(update.effective_user.id, choice, msg, "calm")
+    return ConversationHandler.END
+
+
+async def daily_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Įrašyk 3 svarbiausius dienos tikslus, atskirk kableliais:")
+    return DAILY_GOALS
+
+
+async def receive_goals(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    goals = [g.strip() for g in update.message.text.split(";") if g.strip()]
+    if not goals:
+        goals = [g.strip() for g in update.message.text.split(",") if g.strip()]
+    daily_plans.setdefault(update.effective_user.id, []).append({"date": today_str(), "goals": goals})
+    txt = "\n".join(f"- {g}" for g in goals)
+    context.user_data["last_reply"] = txt
+    await update.message.reply_text("✅ Tikslai išsaugoti.")
+    log_interaction(update.effective_user.id, "goals", txt, "daily_plan")
+    return ConversationHandler.END
+
+
+async def mood_progress_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logs = mood_logs.get(update.effective_user.id, [])
+    if not logs:
+        return await update.message.reply_text("Nėra duomenų.")
+    week_ago = dt.date.today() - dt.timedelta(days=7)
+    vals = [int(e.get("rating", 0)) for e in logs if dt.date.fromisoformat(e["date"]) >= week_ago]
+    if not vals:
+        return await update.message.reply_text("Nėra duomenų.")
+    trend = "pagerėjimas" if vals[-1] > vals[0] else "blogėjimas" if vals[-1] < vals[0] else "stabilu"
+    msg = f"Vidutinis nuotaikos balas: {sum(vals)/len(vals):.1f} ({trend})"
+    context.user_data["last_reply"] = msg
+    await update.message.reply_text(msg)
+    return ConversationHandler.END
+
+
+async def panic(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = (
+        "Giliai įkvėpk, sulaikyk 4 s, iškvėpk 6 s. Jei reikalinga skubi pagalba, skambink 112. "
+        "Pagalbos linija LT: 8-800-66366. Tu ne vienas."
+    )
+    context.user_data["last_reply"] = msg
+    await update.message.reply_text(msg)
+
+
+async def set_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    mode = (context.args[0].lower() if context.args else "").strip()
+    if mode not in {"spokoj", "motivation", "focus", "calm"}:
+        return await update.message.reply_text("Naudok: /mode calm|motivation|focus")
+    context.user_data["support_mode"] = mode
+    await update.message.reply_text(f"Režimas nustatytas: {mode}")
+
+
 async def update_metric_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = " ".join(context.args)
     if not text:
@@ -302,7 +455,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/start, /profile, /quiz, /answer, /review, /export_pdf, /export_test, "
         "/export_history, /flashcards, /method, /guideline, /simpatient, /progress, /progress_pdf, "
         "/subscription_status, /upgrade, /create_room, /join_room, /list_rooms, /resetcontext, "
-        "/update_metric, /metrics_progress, /remind"
+        "/update_metric, /metrics_progress, /remind, /mood, /reflect, /calm, /daily_plan, /mood_progress, /panic, /mode"
     )
 
 # Prenumerata
@@ -708,6 +861,38 @@ if __name__ == "__main__":
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
 
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("mood", mood)],
+        states={
+            MOOD_RATING: [MessageHandler(filters.TEXT & ~filters.COMMAND, mood_rating)],
+            MOOD_STRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, mood_stress)],
+            MOOD_WORRY: [MessageHandler(filters.TEXT & ~filters.COMMAND, mood_worry)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    ))
+
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("reflect", reflect)],
+        states={
+            REFLECT_Q1: [MessageHandler(filters.TEXT & ~filters.COMMAND, reflect_q1)],
+            REFLECT_Q2: [MessageHandler(filters.TEXT & ~filters.COMMAND, reflect_q2)],
+            REFLECT_Q3: [MessageHandler(filters.TEXT & ~filters.COMMAND, reflect_q3)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    ))
+
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("calm", calm)],
+        states={CALM_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, calm_choice)]},
+        fallbacks=[CommandHandler("cancel", cancel)],
+    ))
+
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("daily_plan", daily_plan)],
+        states={DAILY_GOALS: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_goals)]},
+        fallbacks=[CommandHandler("cancel", cancel)],
+    ))
+
     # Simple command handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("review", review))
@@ -722,6 +907,9 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("update_metric", update_metric_cmd))
     app.add_handler(CommandHandler("metrics_progress", metrics_progress_cmd))
     app.add_handler(CommandHandler("remind", set_reminder))
+    app.add_handler(CommandHandler("mood_progress", mood_progress_cmd))
+    app.add_handler(CommandHandler("panic", panic))
+    app.add_handler(CommandHandler("mode", set_mode))
     app.add_handler(CommandHandler("subscription_status", subscription_status))
     app.add_handler(CommandHandler("upgrade", upgrade))
     app.add_handler(CommandHandler("create_room", create_room))
