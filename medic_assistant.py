@@ -106,13 +106,17 @@ def detect_language(text: str) -> str:
         return "en"
 
 
+LANG_PROMPTS = {
+    "lt": "Atsakyk lietuviškai.",
+    "en": "Respond in English.",
+    "ru": "Ответь по-русски.",
+    "pl": "Odpowiedz po polsku.",
+}
+
+
 def lang_prompt(code: str) -> str:
-    return {
-        "lt": "Atsakyk lietuviškai.",
-        "en": "Respond in English.",
-        "ru": "Ответь по-русски.",
-        "pl": "Odpowiedz po polsku.",
-    }.get(code, "Respond in English.")
+    """Return a short prompt for the requested language code."""
+    return LANG_PROMPTS.get(code, LANG_PROMPTS["en"])
 
 
 def today_str() -> str:
