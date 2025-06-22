@@ -20,6 +20,7 @@ from telegram import (
     ReplyKeyboardRemove,
 )
 from telegram.ext import (
+    Application,
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
@@ -559,10 +560,22 @@ async def restricted_feature(update: Update, context: ContextTypes.DEFAULT_TYPE,
         f"🔒 Ši funkcija prieinama nuo {TIER_NAMES[min_tier]}. Naudok /upgrade."
     )
 
+
+async def post_init(app: Application) -> None:
+    """Retrieve bot username after initialization."""
+    global BOT_USERNAME
+    me = await app.bot.get_me()
+    BOT_USERNAME = me.username.lower()
+
 # ─────────────────────────── Main entry ───────────────────────────
 if __name__ == "__main__":
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).concurrent_updates(True).build()
-    BOT_USERNAME = app.bot.username.lower()
+    app = (
+        ApplicationBuilder()
+        .token(TELEGRAM_TOKEN)
+        .concurrent_updates(True)
+        .post_init(post_init)
+        .build()
+    )
 
     # Conversation handlers
     app.add_handler(ConversationHandler(
