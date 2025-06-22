@@ -1,10 +1,10 @@
+@@ -1,89 +1,89 @@
 """
 Telegram bot: Medic Assistant
 – Prenumeratos planai, dienos limitai ir funkcijų apribojimai
 – Administratoriai (ADMIN_IDS) nepatenka į limitus
 Autorė: Generated with ChatGPT o3, 2025-06-20 (merged version)
 """
-
 import os
 import logging
 import datetime as dt
@@ -31,16 +31,13 @@ from telegram.ext import (
 )
 from openai import AsyncOpenAI
 from fpdf import FPDF
-
 # ─────────────────────────── Environment ───────────────────────────
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-
 # ───────────────────────────── Admins ──────────────────────────────
 ADMIN_IDS: list[int] = [712878075]  # ← įrašykite kitus administratorių ID, jei reikia
-
 # ───────────────────────────── Constants ───────────────────────────
 SYSTEM_PROMPT = (
     "\n⚠️ Šis DI skirtas tik mokymuisi. "
@@ -48,7 +45,6 @@ SYSTEM_PROMPT = (
     "visi atsakymai turi būti pagrįsti tik recenzuotais medicinos šaltiniais: "
     "PubMed, UpToDate, Cochrane, ECDC gairėmis ir SAM.lt rekomendacijomis."
 )
-
 (
     PROFILE_LANGUAGE,
     PROFILE_COUNTRY,
@@ -66,7 +62,6 @@ SYSTEM_PROMPT = (
     DAILY_GOALS,
     CALM_CHOICE,
 ) = range(15)
-
 # Subscription tiers: 0=Free,1=Basic,2=Pro Student,3=Premium MedTech
 TIER_NAMES: list[str] = [
     "🟢 Free (1 užklausa/d., be PDF)",
@@ -84,6 +79,7 @@ FEATURE_MIN_TIER = {
 
 # ───────────────────────────── Globals ─────────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(message)s")
 user_progress: dict[int, int] = {}            # viso užklausų
 user_daily_usage: dict[int, dict[str, int]] = {}  # {'date': YYYY-MM-DD, 'count': n}
 rooms: dict[str, list[int]] = {}
@@ -96,13 +92,13 @@ reminder_tasks: dict[int, list[asyncio.Task]] = {}
 mood_logs: dict[int, list[dict[str, str]]] = {}
 reflect_logs: dict[int, list[dict[str, str]]] = {}
 daily_plans: dict[int, list[dict[str, list[str]]]] = {}
-
 # ──────────────────────── Helper functions ─────────────────────────
 def detect_language(text: str) -> str:
     try:
         from langdetect import detect
         return detect(text)
     except Exception:
+        return "lt"
         return "en"
 
 
@@ -112,13 +108,12 @@ def lang_prompt(code: str) -> str:
         "en": "Respond in English.",
         "ru": "Ответь по-русски.",
         "pl": "Odpowiedz po polsku.",
+    }.get(code, "Atsakyk lietuviškai.")
     }.get(code, "Respond in English.")
 
 
 def today_str() -> str:
     return dt.date.today().isoformat()
-
-
 def increment_usage(user_id: int) -> bool:
     """Padidina dienos skaitiklį. Grąžina True, jei dar nepasiektas limitas / admin / neribota."""
     if user_id in ADMIN_IDS:
@@ -135,14 +130,10 @@ def increment_usage(user_id: int) -> bool:
         return False
     record["count"] += 1
     return True
-
-
 def has_feature(user_id: int, feature: str) -> bool:
     if user_id in ADMIN_IDS:
         return True
     return user_tiers.get(user_id, 0) >= FEATURE_MIN_TIER.get(feature, 0)
-
-
 def save_as_pdf(text: str, filename: str = "document.pdf") -> str:
     pdf = FPDF()
     pdf.add_page()
@@ -151,6 +142,7 @@ def save_as_pdf(text: str, filename: str = "document.pdf") -> str:
     for line in text.split("\n"):
         pdf.multi_cell(0, 10, line)
     path = f"/tmp/{filename}"
+    pdf.output(path)
     try:
         pdf.output(path)
     except Exception as e:
@@ -170,8 +162,6 @@ def log_interaction(user_id: int, question: str, answer: str, feature: str = "")
             "time": dt.datetime.now().isoformat(),
         }
     )
-
-
 def parse_metrics(text: str) -> dict[str, float | str]:
     """Extract health metrics from arbitrary text."""
     metrics: dict[str, float | str] = {}
@@ -197,6 +187,16 @@ def strip_keywords(text: str, keywords: list[str]) -> str:
 
 
 async def ask_openai(user_msg: str, lang_code: str) -> str:
+    resp = await client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": f"{lang_prompt(lang_code)} {SYSTEM_PROMPT}"},
+            {"role": "user", "content": user_msg},
+        ],
+        temperature=0.5,
+        max_tokens=1500,
+    )
+    return resp.choices[0].message.content
     try:
         resp = await client.chat.completions.create(
             model="gpt-4o-mini",
@@ -224,16 +224,12 @@ async def generate_quiz(topic: str, context: ContextTypes.DEFAULT_TYPE) -> str:
     context.user_data["last_quiz"] = {"topic": topic, "content": questions}
     context.user_data["last_reply"] = questions
     return questions
-
-
 async def generate_flashcards(topic: str, context: ContextTypes.DEFAULT_TYPE) -> str:
     lang = context.user_data.get("profile", {}).get("language", detect_language(topic))
     prompt = f"Sukurk 5 flashcards tema: {topic}, klausimas ir trumpas atsakymas."
     cards = await ask_openai(prompt, lang)
     context.user_data["last_reply"] = cards
     return cards
-
-
 async def generate_notes(topic: str, context: ContextTypes.DEFAULT_TYPE) -> str:
     lang = context.user_data.get("profile", {}).get("language", detect_language(topic))
     prompt = (
@@ -243,8 +239,6 @@ async def generate_notes(topic: str, context: ContextTypes.DEFAULT_TYPE) -> str:
     notes = await ask_openai(prompt, lang)
     context.user_data["last_reply"] = notes
     return notes
-
-
 async def analyze_literature(reference: str, context: ContextTypes.DEFAULT_TYPE) -> str:
     lang = context.user_data.get("profile", {}).get("language", detect_language(reference))
     prompt = (
@@ -254,25 +248,18 @@ async def analyze_literature(reference: str, context: ContextTypes.DEFAULT_TYPE)
     summary = await ask_openai(prompt, lang)
     context.user_data["last_reply"] = summary
     return summary
-
 # ──────────────────── PsycheCare functions ─────────────────────
 async def mood(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Kaip įvertintum nuotaiką 1–10?")
     return MOOD_RATING
-
-
 async def mood_rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["mood_entry"] = {"date": today_str(), "rating": update.message.text.strip()}
     await update.message.reply_text("Ar jauti stresą ar nerimą?")
     return MOOD_STRESS
-
-
 async def mood_stress(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["mood_entry"]["stress"] = update.message.text.strip()
     await update.message.reply_text("Kas labiausiai neramina?")
     return MOOD_WORRY
-
-
 async def mood_worry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     entry = context.user_data.pop("mood_entry", {})
     entry["worry"] = update.message.text.strip()
@@ -287,25 +274,17 @@ async def mood_worry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(support)
     log_interaction(update.effective_user.id, json.dumps(entry, ensure_ascii=False), support, "mood")
     return ConversationHandler.END
-
-
 async def reflect(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Kas šiandien pavyko?")
     return REFLECT_Q1
-
-
 async def reflect_q1(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["reflect"] = {"date": today_str(), "success": update.message.text.strip()}
     await update.message.reply_text("Kas sukėlė nerimą?")
     return REFLECT_Q2
-
-
 async def reflect_q2(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["reflect"]["anxiety"] = update.message.text.strip()
     await update.message.reply_text("Kokios mintys buvo įkyrios?")
     return REFLECT_Q3
-
-
 async def reflect_q3(update: Update, context: ContextTypes.DEFAULT_TYPE):
     entry = context.user_data.pop("reflect", {})
     entry["thoughts"] = update.message.text.strip()
@@ -314,16 +293,12 @@ async def reflect_q3(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Užrašyta.")
     log_interaction(update.effective_user.id, json.dumps(entry, ensure_ascii=False), "saved", "reflect")
     return ConversationHandler.END
-
-
 async def calm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [["Kvėpavimas"], ["Meditacija"], ["Vizualizacija"], ["Afirmacijos"]]
     await update.message.reply_text(
         "Pasirink pratimą:", reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
     )
     return CALM_CHOICE
-
-
 async def calm_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     choice = update.message.text.lower()
     if "kv" in choice:
@@ -338,13 +313,9 @@ async def calm_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["last_reply"] = msg
     log_interaction(update.effective_user.id, choice, msg, "calm")
     return ConversationHandler.END
-
-
 async def daily_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Įrašyk 3 svarbiausius dienos tikslus, atskirk kableliais:")
     return DAILY_GOALS
-
-
 async def receive_goals(update: Update, context: ContextTypes.DEFAULT_TYPE):
     goals = [g.strip() for g in update.message.text.split(";") if g.strip()]
     if not goals:
@@ -355,8 +326,6 @@ async def receive_goals(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Tikslai išsaugoti.")
     log_interaction(update.effective_user.id, "goals", txt, "daily_plan")
     return ConversationHandler.END
-
-
 async def mood_progress_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logs = mood_logs.get(update.effective_user.id, [])
     if not logs:
@@ -370,8 +339,6 @@ async def mood_progress_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["last_reply"] = msg
     await update.message.reply_text(msg)
     return ConversationHandler.END
-
-
 async def panic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
         "Giliai įkvėpk, sulaikyk 4 s, iškvėpk 6 s. Jei reikalinga skubi pagalba, skambink 112. "
@@ -379,16 +346,12 @@ async def panic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     context.user_data["last_reply"] = msg
     await update.message.reply_text(msg)
-
-
 async def set_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mode = (context.args[0].lower() if context.args else "").strip()
     if mode not in {"spokoj", "motivation", "focus", "calm"}:
         return await update.message.reply_text("Naudok: /mode calm|motivation|focus")
     context.user_data["support_mode"] = mode
     await update.message.reply_text(f"Režimas nustatytas: {mode}")
-
-
 async def update_metric_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = " ".join(context.args)
     if not text:
@@ -402,8 +365,6 @@ async def update_metric_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     metrics = health_metrics.setdefault(update.effective_user.id, [])
     metrics.append(data)
     await update.message.reply_text("✅ Duomenys išsaugoti.")
-
-
 async def metrics_progress_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     metrics = health_metrics.get(update.effective_user.id)
     if not metrics or len(metrics) < 2:
@@ -418,20 +379,14 @@ async def metrics_progress_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
         changes.append(f"Svorio pokytis: {diff:+.1f} kg")
     msg = "\n".join(changes) or "Nėra pakankamai duomenų."
     await update.message.reply_text(msg)
-
-
 async def _reminder_once(bot, chat_id: int, delay: float, text: str):
     await asyncio.sleep(delay)
     await bot.send_message(chat_id, text)
-
-
 async def _reminder_loop(bot, chat_id: int, delay: float, interval: float, text: str):
     await asyncio.sleep(delay)
     while True:
         await bot.send_message(chat_id, text)
         await asyncio.sleep(interval)
-
-
 async def set_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
         return await update.message.reply_text(
@@ -460,7 +415,6 @@ async def set_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     reminder_tasks.setdefault(update.effective_user.id, []).append(task)
     await update.message.reply_text("✅ Priminimas nustatytas.")
-
 # ──────────────────────────── Commands ─────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 Sveikas! Aš – *Medic Assistant*.", parse_mode="Markdown")
@@ -471,13 +425,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/subscription_status, /upgrade, /create_room, /join_room, /list_rooms, /resetcontext, "
         "/update_metric, /metrics_progress, /remind, /mood, /reflect, /calm, /daily_plan, /mood_progress, /panic, /mode"
     )
-
 # Prenumerata
 async def subscription_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tier = user_tiers.get(update.effective_user.id, 0)
     await update.message.reply_text(f"🔐 Tavo planas: {TIER_NAMES[tier]}")
-
-
 async def upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🔼 Norėdamas atnaujinti prenumeratą:\n"
@@ -485,7 +436,6 @@ async def upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "2️⃣ Po apmokėjimo parašyk /subscription_status – suteiksime prieigas",
         disable_web_page_preview=True,
     )
-
 # Profilis
 async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -493,46 +443,38 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=ReplyKeyboardMarkup([["lt", "en"], ["ru", "pl"]], one_time_keyboard=True),
     )
     return PROFILE_LANGUAGE
-
-
 async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.setdefault("profile", {})["language"] = update.message.text.lower()
-    await update.message.reply_text("Šalis?", reply_markup=ReplyKeyboardRemove())
+    await update.message.reply_text(
+        "Pasirink šalį:",
+        reply_markup=ReplyKeyboardMarkup([["lt", "uk"], ["us", "de"]], one_time_keyboard=True),
+    )
     return PROFILE_COUNTRY
-
-
 async def set_country(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.setdefault("profile", {})["country"] = update.message.text.lower()
-    await update.message.reply_text("Lygis? (studentas/gydytojas)")
+    context.user_data["profile"]["country"] = update.message.text.lower()
+    await update.message.reply_text(
+        "Pasirink lygį:",
+        reply_markup=ReplyKeyboardMarkup([["studentas", "gydytojas", "mokslininkas"]], one_time_keyboard=True),
+    )
     return PROFILE_LEVEL
-
-
 async def set_level(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["profile"]["level"] = update.message.text.lower()
     await update.message.reply_text(f"✅ Profilis nustatytas: {context.user_data['profile']}",
                                     reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
-
-
 async def resetcontext(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text("♻️ Kontekstas išvalytas!")
-
-
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Nutraukta.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
-
 # Method info
 async def method(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📖 Įrašyk medicininį metodą, kurį nori suprasti.")
-
 # Quiz
 async def quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🧪 Įrašyk testavimo temą:")
     return QUIZ_TOPIC
-
-
 async def receive_quiz_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not increment_usage(update.effective_user.id):
         return await quota_exceeded(update, context)
@@ -550,16 +492,12 @@ async def receive_quiz_topic(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text(f"🧠 Klausimai apie '{topic}':\n\n{questions}")
     log_interaction(update.effective_user.id, topic, questions, "quiz")
     return ConversationHandler.END
-
-
 async def answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "last_quiz" not in context.user_data:
         await update.message.reply_text("❗ Su /quiz sukurk testą.")
         return ConversationHandler.END
     await update.message.reply_text("✏️ Įvesk savo atsakymus A/B/C, pvz.: A B C")
     return ANSWER_STATE
-
-
 async def receive_answers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not increment_usage(update.effective_user.id):
         return await quota_exceeded(update, context)
@@ -572,19 +510,19 @@ async def receive_answers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"📝 Vertinimas:\n{result}")
     log_interaction(update.effective_user.id, ans, result, "answer")
     return ConversationHandler.END
-
-
 async def review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "last_quiz" in context.user_data:
         q = context.user_data["last_quiz"]
         await update.message.reply_text(f"🔁 Testas apie '{q['topic']}':\n\n{q['content']}")
     else:
         await update.message.reply_text("❗ Nėra testo.")
-
 # Export PDF (tier ≥2)
 async def export_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not has_feature(update.effective_user.id, "pdf"):
         return await restricted_feature(update, context, "pdf")
+    if "last_reply" in context.user_data:
+        path = save_as_pdf(context.user_data["last_reply"], "reply.pdf")
+        await update.message.reply_document(InputFile(path))
     if "last_reply" in context.user_data:
         path = save_as_pdf(context.user_data["last_reply"], "reply.pdf")
         if path:
@@ -594,13 +532,14 @@ async def export_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❗ Nėra atsakymo.")
 
-
 async def export_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not has_feature(update.effective_user.id, "pdf"):
         return await restricted_feature(update, context, "pdf")
     if "last_quiz" in context.user_data:
         q = context.user_data["last_quiz"]
         text = f"Tema: {q['topic']}\n\n{q['content']}"
+        path = save_as_pdf(text, "testas.pdf")
+        await update.message.reply_document(InputFile(path))
         path = save_as_pdf(text, "testas.pdf")
         if path:
             await update.message.reply_document(InputFile(path))
@@ -627,6 +566,7 @@ async def export_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         text = "\n\n".join(f"Q: {h['q']}\nA: {h['a']}" for h in hist)
         path = save_as_pdf(text, "history.pdf")
+    await update.message.reply_document(InputFile(path))
     if path:
         await update.message.reply_document(InputFile(path))
     else:
@@ -638,8 +578,6 @@ async def flashcards(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await restricted_feature(update, context, "flashcards")
     await update.message.reply_text("📚 Įrašyk temą flashcards:")
     return FLASH_TOPIC
-
-
 async def receive_flash_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not increment_usage(update.effective_user.id):
         return await quota_exceeded(update, context)
@@ -651,13 +589,10 @@ async def receive_flash_topic(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text(f"🧠 Flashcards:\n\n{rc}")
     log_interaction(update.effective_user.id, top, rc, "flashcards")
     return ConversationHandler.END
-
 # Simulated patient
 async def simpatient(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🤖 Įrašyk simptomus:")
     return SIM_SYMPTOMS
-
-
 async def receive_symptoms(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not increment_usage(update.effective_user.id):
         return await quota_exceeded(update, context)
@@ -669,21 +604,17 @@ async def receive_symptoms(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"📋 Atvejis:\n\n{case}")
     log_interaction(update.effective_user.id, sym, case, "simpatient")
     return ConversationHandler.END
-
 # Guidelines feed
 async def guideline(update: Update, context: ContextTypes.DEFAULT_TYPE):
     feed = feedparser.parse("https://www.ecdc.europa.eu/en/latest-news/rss")
     items = feed["entries"][:3]
     msg = "📑 Naujausios ECDC gairės:\n" + "\n".join(f"- {i.title}: {i.link}" for i in items)
     await update.message.reply_text(msg)
-
 # Progress
 async def progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     cnt = user_progress.get(uid, 0)
     await update.message.reply_text(f"📊 Užklausų (viso): {cnt}")
-
-
 async def progress_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not has_feature(update.effective_user.id, "pdf"):
         return await restricted_feature(update, context, "pdf")
@@ -691,6 +622,7 @@ async def progress_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cnt = user_progress.get(uid, 0)
     txt = f"Naudotojo ID: {uid}\nUžklausos (viso): {cnt}"
     path = save_as_pdf(txt, "progress.pdf")
+    await update.message.reply_document(InputFile(path))
     if path:
         await update.message.reply_document(InputFile(path))
     else:
@@ -704,7 +636,6 @@ async def usage_log_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         counts[rec["user"]] = counts.get(rec["user"], 0) + 1
     msg = "\n".join(f"{uid}: {cnt}" for uid, cnt in counts.items()) or "No usage"
     await update.message.reply_text(msg)
-
 # Rooms (tier ≥3)
 async def create_room(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not has_feature(update.effective_user.id, "rooms"):
@@ -714,8 +645,6 @@ async def create_room(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text("❗ Nurodyk kambario pavadinimą.")
     rooms.setdefault(room, []).append(update.effective_user.id)
     await update.message.reply_text(f"✅ Kambarys sukurtas: {room}")
-
-
 async def join_room(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not has_feature(update.effective_user.id, "rooms"):
         return await restricted_feature(update, context, "rooms")
@@ -725,8 +654,6 @@ async def join_room(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ Prisijungei: {room}")
     else:
         await update.message.reply_text("❗ Nėra kambario")
-
-
 async def list_rooms(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not has_feature(update.effective_user.id, "rooms"):
         return await restricted_feature(update, context, "rooms")
@@ -734,7 +661,6 @@ async def list_rooms(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📋 Kambariai:\n" + "\n".join(rooms.keys()))
     else:
         await update.message.reply_text("❗ Nėra kambarių")
-
 # Image analysis (tier ≥3)
 async def image_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not has_feature(update.effective_user.id, "image_analysis"):
@@ -744,12 +670,10 @@ async def image_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file = await update.message.photo[-1].get_file()
     path = f"/tmp/{file.file_id}.jpg"
     await file.download_to_drive(path)
-
     # OpenAI API can't access local file paths. Send the image as a Base64 data
     # URL instead.
     with open(path, "rb") as img:
         encoded = base64.b64encode(img.read()).decode()
-
     analysis = await client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
@@ -775,21 +699,22 @@ async def image_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Generic message
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logging.debug("Message from %s in %s: %s", update.effective_user.id, update.message.chat.type, update.message.text)
     if not increment_usage(update.effective_user.id):
         return await quota_exceeded(update, context)
     user_msg = update.message.text
-
     if "profile" not in context.user_data and not context.user_data.get("profile_prompted"):
         await update.message.reply_text("🔧 Susikurk profilį su /profile, kad galėtum gauti personalizuotus atsakymus.")
         context.user_data["profile_prompted"] = True
-
     # In group chats, respond only when mentioned or replied to
     if update.message.chat.type != "private":
         if BOT_USERNAME is None:
             # Bot username not yet initialized -> ignore group messages
+            logging.debug("Bot username not initialized, ignoring message")
             return
         mention = f"@{BOT_USERNAME}"
         if not (mention.lower() in user_msg.lower() or update.message.reply_to_message):
+            logging.debug("Message in group without mention, ignoring")
             return
         user_msg = user_msg.replace(mention, "", 1).strip()
 
@@ -798,17 +723,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_progress[update.effective_user.id] = user_progress.get(update.effective_user.id, 0) + 1
 
     if any(k in low for k in ["testas", "užduotys", "pasitikrink"]):
+        reply = await generate_quiz(user_msg, context)
         topic = strip_keywords(user_msg, ["testas", "užduotys", "pasitikrink"])
         reply = await generate_quiz(topic or user_msg, context)
     elif any(k in low for k in ["flashcards", "kortelės", "atmintinė"]):
         if not has_feature(update.effective_user.id, "flashcards"):
             return await restricted_feature(update, context, "flashcards")
+        reply = await generate_flashcards(user_msg, context)
         topic = strip_keywords(user_msg, ["flashcards", "kortelės", "atmintinė"])
         reply = await generate_flashcards(topic or user_msg, context)
     elif any(k in low for k in ["konspektas", "santrauka", "paaiškink"]):
+        reply = await generate_notes(user_msg, context)
         topic = strip_keywords(user_msg, ["konspektas", "santrauka", "paaiškink"])
         reply = await generate_notes(topic or user_msg, context)
-    elif re.match(r"^10.\\d{4,9}/[-._;()/:A-Z0-9]+$", user_msg, re.I):
+    elif re.match(r"^10.\d{4,9}/[-._;()/:A-Z0-9]+$", user_msg, re.I):
         reply = await analyze_literature(user_msg, context)
     else:
         reply = await ask_openai(user_msg, lang_code)
@@ -816,6 +744,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(reply)
     log_interaction(update.effective_user.id, user_msg, reply)
+    logging.debug("Replied to %s", update.effective_user.id)
 
 # ──────────────────────────── Helpers ──────────────────────────────
 async def quota_exceeded(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -824,20 +753,17 @@ async def quota_exceeded(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"🚦 Viršyta dienos riba ({quota} užklausa). Atnaujink planą su /upgrade arba bandyk rytoj."
     )
-
-
 async def restricted_feature(update: Update, context: ContextTypes.DEFAULT_TYPE, feature: str):
     min_tier = FEATURE_MIN_TIER[feature]
     await update.message.reply_text(
         f"🔒 Ši funkcija prieinama nuo {TIER_NAMES[min_tier]}. Naudok /upgrade."
     )
-
-
 async def post_init(app: Application) -> None:
     """Retrieve bot username after initialization."""
     global BOT_USERNAME
     me = await app.bot.get_me()
     BOT_USERNAME = me.username.lower()
+    logging.debug("Initialized bot username: %s", BOT_USERNAME)
 
 # ─────────────────────────── Main entry ───────────────────────────
 if __name__ == "__main__":
@@ -848,7 +774,6 @@ if __name__ == "__main__":
         .post_init(post_init)
         .build()
     )
-
     # Conversation handlers
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("profile", profile)],
@@ -859,31 +784,26 @@ if __name__ == "__main__":
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
-
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("quiz", quiz)],
         states={QUIZ_TOPIC: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_quiz_topic)]},
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
-
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("answer", answer)],
         states={ANSWER_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_answers)]},
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
-
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("flashcards", flashcards)],
         states={FLASH_TOPIC: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_flash_topic)]},
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
-
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("simpatient", simpatient)],
         states={SIM_SYMPTOMS: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_symptoms)]},
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
-
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("mood", mood)],
         states={
@@ -893,7 +813,6 @@ if __name__ == "__main__":
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
-
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("reflect", reflect)],
         states={
@@ -903,19 +822,16 @@ if __name__ == "__main__":
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
-
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("calm", calm)],
         states={CALM_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, calm_choice)]},
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
-
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("daily_plan", daily_plan)],
         states={DAILY_GOALS: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_goals)]},
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
-
     # Simple command handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("review", review))
@@ -943,10 +859,14 @@ if __name__ == "__main__":
     # Message / photo handlers
     app.add_handler(MessageHandler(filters.PHOTO, image_analysis))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.PHOTO, image_analysis))
+    text_filter = filters.TEXT & ~filters.COMMAND
+    app.add_handler(MessageHandler(filters.ChatType.GROUPS & text_filter, handle_message))
+    app.add_handler(MessageHandler(filters.ChatType.PRIVATE & text_filter, handle_message))
 
     logging.info("🤖 Medic Assistant veikia su prenumeratomis + admin išimtimis.")
     app.run_polling(drop_pending_updates=True)
-
+    
 
  
  
