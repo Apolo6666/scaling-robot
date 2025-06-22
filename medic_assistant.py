@@ -12,6 +12,7 @@ import feedparser
 import json
 import base64
 import re
+import asyncio
 from dotenv import load_dotenv
 from telegram import (
     Update,
@@ -74,6 +75,8 @@ user_tiers: dict[int, int] = {}               # default → Free
 BOT_USERNAME: str | None = None
 user_history: dict[int, list[dict[str, str]]] = {}
 analytics_log: list[dict[str, str]] = []
+health_metrics: dict[int, list[dict[str, float | str]]] = {}
+reminder_tasks: dict[int, list[asyncio.Task]] = {}
 
 # ──────────────────────── Helper functions ─────────────────────────
 def detect_language(text: str) -> str:
@@ -146,6 +149,23 @@ def log_interaction(user_id: int, question: str, answer: str, feature: str = "")
     )
 
 
+def parse_metrics(text: str) -> dict[str, float | str]:
+    """Extract health metrics from arbitrary text."""
+    metrics: dict[str, float | str] = {}
+    pattern = r"(svoris|kmi|kraujosp\u016bdis|gliukoz\u0117|pulsas|cholesterolis)[:=]?\s*([0-9]+(?:[\.,][0-9]+)?(?:/[0-9]+)?)"
+    for key, value in re.findall(pattern, text, re.I):
+        key = key.lower()
+        value = value.replace(',', '.')
+        if '/' in value:
+            metrics[key] = value
+        else:
+            try:
+                metrics[key] = float(value)
+            except ValueError:
+                continue
+    return metrics
+
+
 async def ask_openai(user_msg: str, lang_code: str) -> str:
     resp = await client.chat.completions.create(
         model="gpt-4o-mini",
@@ -201,6 +221,79 @@ async def analyze_literature(reference: str, context: ContextTypes.DEFAULT_TYPE)
     context.user_data["last_reply"] = summary
     return summary
 
+
+async def update_metric_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = " ".join(context.args)
+    if not text:
+        return await update.message.reply_text(
+            "Naudok: /update_metric svoris=80 kmi=25 kraujospūdis=120/80 ..."
+        )
+    data = parse_metrics(text)
+    if not data:
+        return await update.message.reply_text("Nepavyko suprasti duomenų.")
+    data["date"] = dt.datetime.now().isoformat()
+    metrics = health_metrics.setdefault(update.effective_user.id, [])
+    metrics.append(data)
+    await update.message.reply_text("✅ Duomenys išsaugoti.")
+
+
+async def metrics_progress_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    metrics = health_metrics.get(update.effective_user.id)
+    if not metrics or len(metrics) < 2:
+        return await update.message.reply_text("Nėra pakankamai duomenų.")
+    first, last = metrics[0], metrics[-1]
+    changes = []
+    if "kmi" in first and "kmi" in last:
+        diff = last["kmi"] - first["kmi"]
+        changes.append(f"KMI pokytis: {diff:+.1f}")
+    if "svoris" in first and "svoris" in last:
+        diff = last["svoris"] - first["svoris"]
+        changes.append(f"Svorio pokytis: {diff:+.1f} kg")
+    msg = "\n".join(changes) or "Nėra pakankamai duomenų."
+    await update.message.reply_text(msg)
+
+
+async def _reminder_once(bot, chat_id: int, delay: float, text: str):
+    await asyncio.sleep(delay)
+    await bot.send_message(chat_id, text)
+
+
+async def _reminder_loop(bot, chat_id: int, delay: float, interval: float, text: str):
+    await asyncio.sleep(delay)
+    while True:
+        await bot.send_message(chat_id, text)
+        await asyncio.sleep(interval)
+
+
+async def set_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) < 2:
+        return await update.message.reply_text(
+            "Naudok: /remind <daily|weekly|YYYY-MM-DD> tekstas"
+        )
+    mode = context.args[0].lower()
+    text = " ".join(context.args[1:])
+    if mode == "daily":
+        task = context.application.create_task(
+            _reminder_loop(context.bot, update.effective_chat.id, 0, 86400, text)
+        )
+    elif mode == "weekly":
+        task = context.application.create_task(
+            _reminder_loop(context.bot, update.effective_chat.id, 0, 604800, text)
+        )
+    else:
+        try:
+            target = dt.datetime.strptime(mode, "%Y-%m-%d")
+        except ValueError:
+            return await update.message.reply_text("Data turi būti YYYY-MM-DD.")
+        delay = (target - dt.datetime.now()).total_seconds()
+        if delay <= 0:
+            return await update.message.reply_text("Data turi būti ateityje.")
+        task = context.application.create_task(
+            _reminder_once(context.bot, update.effective_chat.id, delay, text)
+        )
+    reminder_tasks.setdefault(update.effective_user.id, []).append(task)
+    await update.message.reply_text("✅ Priminimas nustatytas.")
+
 # ──────────────────────────── Commands ─────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 Sveikas! Aš – *Medic Assistant*.", parse_mode="Markdown")
@@ -208,7 +301,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Komandos:\n"
         "/start, /profile, /quiz, /answer, /review, /export_pdf, /export_test, "
         "/export_history, /flashcards, /method, /guideline, /simpatient, /progress, /progress_pdf, "
-        "/subscription_status, /upgrade, /create_room, /join_room, /list_rooms, /resetcontext"
+        "/subscription_status, /upgrade, /create_room, /join_room, /list_rooms, /resetcontext, "
+        "/update_metric, /metrics_progress, /remind"
     )
 
 # Prenumerata
@@ -625,6 +719,9 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("progress", progress))
     app.add_handler(CommandHandler("progress_pdf", progress_pdf))
     app.add_handler(CommandHandler("usage_log", usage_log_cmd))
+    app.add_handler(CommandHandler("update_metric", update_metric_cmd))
+    app.add_handler(CommandHandler("metrics_progress", metrics_progress_cmd))
+    app.add_handler(CommandHandler("remind", set_reminder))
     app.add_handler(CommandHandler("subscription_status", subscription_status))
     app.add_handler(CommandHandler("upgrade", upgrade))
     app.add_handler(CommandHandler("create_room", create_room))
