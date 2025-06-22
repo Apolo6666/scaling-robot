@@ -518,11 +518,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # In group chats, respond only when mentioned or replied to
     if update.message.chat.type != "private":
-        mention = f"@{BOT_USERNAME}" if BOT_USERNAME else ""
+        if BOT_USERNAME is None:
+            # Bot username not yet initialized -> ignore group messages
+            return
+        mention = f"@{BOT_USERNAME}"
         if not (mention.lower() in user_msg.lower() or update.message.reply_to_message):
             return
-        if mention:
-            user_msg = user_msg.replace(mention, "", 1).strip()
+        user_msg = user_msg.replace(mention, "", 1).strip()
 
     low = user_msg.lower()
     lang_code = context.user_data.get("profile", {}).get("language", detect_language(user_msg))
